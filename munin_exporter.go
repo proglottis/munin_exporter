@@ -272,27 +272,33 @@ func (s *MuninScraper) Handler() http.Handler {
 func main() {
 	flag.Parse()
 
-	scraper := NewMuninScraper(*muninAddress)
-	if err := scraper.Connect(); err != nil {
-		log.Fatalf("Could not connect to %s: %s", *muninAddress, err)
-	}
-	if err := scraper.RegisterMetrics(); err != nil {
-		log.Fatalf("Could not register metrics: %s", err)
-	}
-
-	go func() {
-		http.Handle("/metrics", scraper.Handler())
-		http.ListenAndServe(*listeningAddress, nil)
-	}()
-
-	func() {
-		for {
-			log.Printf("Scraping")
-			err := scraper.FetchMetrics()
-			if err != nil {
-				log.Printf("Error occured when trying to fetch metrics: %s", err)
-			}
-			time.Sleep(time.Duration(*muninScrapeInterval) * time.Second)
+	addrs := strings.Split(*muninAddress, ",")
+	for _, addr := range addrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			log.Fatalf("Failed to parse: %s: %s", addr, err)
 		}
-	}()
+		scraper := NewMuninScraper(addr)
+		if err := scraper.Connect(); err != nil {
+			log.Fatalf("Could not connect to %s: %s", addr, err)
+		}
+		if err := scraper.RegisterMetrics(); err != nil {
+			log.Fatalf("Could not register metrics: %s", err)
+		}
+		http.Handle("/"+host, scraper.Handler())
+		go func() {
+			for {
+				log.Printf("Scraping")
+				err := scraper.FetchMetrics()
+				if err != nil {
+					log.Printf("Error occured when trying to fetch metrics: %s", err)
+				}
+				time.Sleep(time.Duration(*muninScrapeInterval) * time.Second)
+			}
+		}()
+	}
+
+	if err := http.ListenAndServe(*listeningAddress, nil); err != nil {
+		log.Fatal(err)
+	}
 }
