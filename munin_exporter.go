@@ -52,12 +52,10 @@ func NewMuninScraper(addr string) *MuninScraper {
 }
 
 func (s *MuninScraper) Connect() (err error) {
-	log.Printf("Connecting...")
 	s.conn, err = net.Dial("tcp", s.Address)
 	if err != nil {
 		return
 	}
-	log.Printf("connected!")
 
 	reader := bufio.NewReader(s.conn)
 	head, err := reader.ReadString('\n')
@@ -70,7 +68,6 @@ func (s *MuninScraper) Connect() (err error) {
 		return fmt.Errorf("Unexpected line: %s", head)
 	}
 	s.hostname = matches[1]
-	log.Printf("Found hostname: %s", s.hostname)
 	return
 }
 
@@ -82,14 +79,14 @@ func (s *MuninScraper) muninCommand(cmd string) (reader *bufio.Reader, err error
 	_, err = reader.Peek(1)
 	switch err {
 	case io.EOF:
-		log.Printf("not connected anymore, closing connection")
+		log.Printf("%s: not connected anymore, closing connection", s.Address)
 		s.conn.Close()
 		for {
 			err = s.Connect()
 			if err == nil {
 				break
 			}
-			log.Printf("Couldn't reconnect: %s", err)
+			log.Printf("%s: Couldn't reconnect: %s", s.Address, err)
 			time.Sleep(retryInterval * time.Second)
 		}
 
@@ -97,7 +94,7 @@ func (s *MuninScraper) muninCommand(cmd string) (reader *bufio.Reader, err error
 	case nil: //no error
 		break
 	default:
-		log.Fatalf("Unexpected error: %s", err)
+		log.Fatalf("%s: Unexpected error: %s", s.Address, err)
 	}
 
 	return
@@ -106,13 +103,13 @@ func (s *MuninScraper) muninCommand(cmd string) (reader *bufio.Reader, err error
 func (s *MuninScraper) muninList() (items []string, err error) {
 	munin, err := s.muninCommand("list")
 	if err != nil {
-		log.Printf("couldn't get list")
+		log.Printf("%s: couldn't get list", s.Address)
 		return
 	}
 
 	response, err := munin.ReadString('\n') // we are only interested in the first line
 	if err != nil {
-		log.Printf("couldn't read response")
+		log.Printf("%s: couldn't read response", s.Address)
 		return
 	}
 
@@ -130,14 +127,14 @@ func (s *MuninScraper) muninConfig(name string) (config map[string]map[string]st
 
 	resp, err := s.muninCommand("config " + name)
 	if err != nil {
-		log.Printf("couldn't get config for %s", name)
+		log.Printf("%s: couldn't get config for %s", s.Address, name)
 		return
 	}
 
 	for {
 		line, err := resp.ReadString('\n')
 		if err == io.EOF {
-			log.Fatalf("unexpected EOF, retrying")
+			log.Fatalf("%s: unexpected EOF, retrying", s.Address)
 			return s.muninConfig(name)
 		}
 		if err != nil {
@@ -198,7 +195,6 @@ func (s *MuninScraper) RegisterMetrics() (err error) {
 					},
 					[]string{"hostname", "graphname", "muninlabel"},
 				)
-				log.Printf("Registered counter %s: %s", metricName, desc)
 				s.counterPerMetric[metricName] = gv
 				s.registry.Register(gv)
 
@@ -211,7 +207,6 @@ func (s *MuninScraper) RegisterMetrics() (err error) {
 					},
 					[]string{"hostname", "graphname", "muninlabel"},
 				)
-				log.Printf("Registered gauge %s: %s", metricName, desc)
 				s.gaugePerMetric[metricName] = gv
 				s.registry.Register(gv)
 			}
@@ -231,30 +226,28 @@ func (s *MuninScraper) FetchMetrics() (err error) {
 			line, err := munin.ReadString('\n')
 			line = strings.TrimRight(line, "\n")
 			if err == io.EOF {
-				log.Fatalf("unexpected EOF, retrying")
+				log.Fatalf("%s: unexpected EOF, retrying", s.Address)
 				return s.FetchMetrics()
 			}
 			if err != nil {
 				return err
 			}
 			if len(line) == 1 && line[0] == '.' {
-				log.Printf("End of list")
 				break
 			}
 
 			parts := strings.Fields(line)
 			if len(parts) != 2 {
-				log.Printf("unexpected line: %s", line)
+				log.Printf("%s: unexpected line: %s", s.Address, line)
 				continue
 			}
 			key, valueString := strings.Split(parts[0], ".")[0], parts[1]
 			value, err := strconv.ParseFloat(valueString, 64)
 			if err != nil {
-				log.Printf("Couldn't parse value in line %s, malformed?", line)
+				log.Printf("%s: Couldn't parse value in line %s, malformed?", s.Address, line)
 				continue
 			}
 			name := strings.Replace(graph+"_"+key, "-", "_", -1)
-			log.Printf("%s: %f\n", name, value)
 			_, isGauge := s.gaugePerMetric[name]
 			if isGauge {
 				s.gaugePerMetric[name].WithLabelValues(s.hostname, graph, key).Set(value)
@@ -287,13 +280,12 @@ func main() {
 		http.Handle("/"+host, scraper.Handler())
 		go func() {
 			if err := scraper.RegisterMetrics(); err != nil {
-				log.Fatalf("Could not register metrics: %s", err)
+				log.Fatalf("%s: Could not register metrics: %s", scraper.Address, err)
 			}
 			for {
-				log.Printf("Scraping")
 				err := scraper.FetchMetrics()
 				if err != nil {
-					log.Printf("Error occured when trying to fetch metrics: %s", err)
+					log.Printf("%s: Error occured when trying to fetch metrics: %s", scraper.Address, err)
 				}
 				time.Sleep(time.Duration(*muninScrapeInterval) * time.Second)
 			}
