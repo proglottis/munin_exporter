@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -270,6 +271,7 @@ func (s *MuninScraper) Handler() http.Handler {
 }
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	flag.Parse()
 
 	addrs := strings.Split(*muninAddress, ",")
@@ -282,11 +284,11 @@ func main() {
 		if err := scraper.Connect(); err != nil {
 			log.Fatalf("Could not connect to %s: %s", addr, err)
 		}
-		if err := scraper.RegisterMetrics(); err != nil {
-			log.Fatalf("Could not register metrics: %s", err)
-		}
 		http.Handle("/"+host, scraper.Handler())
 		go func() {
+			if err := scraper.RegisterMetrics(); err != nil {
+				log.Fatalf("Could not register metrics: %s", err)
+			}
 			for {
 				log.Printf("Scraping")
 				err := scraper.FetchMetrics()
